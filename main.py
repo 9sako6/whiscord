@@ -1,6 +1,7 @@
 import os
 import tempfile
 import threading
+import numpy
 import pyaudio
 import wave
 import whisper
@@ -44,46 +45,65 @@ def clean():
         os.remove(file_path)
 
 
+def transcribe():
+    file_path = q.get()
+
+    audio = whisper.load_audio(file_path)
+    os.remove(file_path)
+
+    audio = whisper.pad_or_trim(audio)
+
+    mean = numpy.mean(numpy.abs(audio))
+
+    print("mean: ", mean)
+
+    if (mean < 0.002):
+        print("[Silent]")
+        return
+
+    # make log-Mel spectrogram and move to the same device as the model
+    mel = whisper.log_mel_spectrogram(audio).to(model.device)
+    # detect the spoken language
+    _, probs = model.detect_language(mel)
+    print(f"Detected language: {max(probs, key=probs.get)}")
+    # decode the audio
+    options = whisper.DecodingOptions(fp16=False)
+    result = whisper.decode(model, mel, options)
+    print(f'{max(probs, key=probs.get)}: {result.text}')
+
+
 def gen_text():
     while True:
-        file_path = q.get()
+        transcribe()
 
-        audio = whisper.load_audio(file_path)
-        os.remove(file_path)
 
-        audio = whisper.pad_or_trim(audio)
-
-        # make log-Mel spectrogram and move to the same device as the model
-        mel = whisper.log_mel_spectrogram(audio).to(model.device)
-        # detect the spoken language
-        _, probs = model.detect_language(mel)
-        print(f"Detected language: {max(probs, key=probs.get)}")
-        # decode the audio
-        options = whisper.DecodingOptions(fp16=False)
-        result = whisper.decode(model, mel, options)
-        print(f'{max(probs, key=probs.get)}: {result.text}')
+def save_audio(data: bytes):
+    _, output_path = tempfile.mkstemp(suffix=".wav")
+    wf = wave.open(output_path, "wb")
+    wf.setnchannels(CHANNELS)
+    wf.setsampwidth(pa.get_sample_size(FORMAT))
+    wf.setframerate(RATE)
+    wf.writeframes(data)
+    wf.close()
+    return output_path
 
 
 threading.Thread(target=gen_text, daemon=True).start()
 
 try:
+    buffer = []
     while True:
-        frames = []
         n = 0
         while n < RATE * INTERVAL:
             data = stream.read(BUFFER_SIZE)
-            frames.append(data)
+            buffer.append(data)
             n += len(data)
 
-        _, output_path = tempfile.mkstemp(suffix=".wav")
-        wf = wave.open(output_path, "wb")
-        wf.setnchannels(CHANNELS)
-        wf.setsampwidth(pa.get_sample_size(FORMAT))
-        wf.setframerate(RATE)
-        wf.writeframes(b"".join(frames))
-        wf.close()
+        output_path = save_audio(b"".join(buffer))
 
         q.put(output_path)
+
+        buffer = []
 
 
 # Stop when Ctrl + C is pressed
