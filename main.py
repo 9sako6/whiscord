@@ -106,11 +106,6 @@ try:
         buffer = []
 
 
-# Stop when Ctrl + C is pressed
-except KeyboardInterrupt:
-    print("Stop recording")
-
-    clean()
-
 except:
+    print("Stop recording")
     clean()
